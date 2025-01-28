@@ -30,7 +30,7 @@ THREADS_PER_JOB   = [TOREPLACE]      # Threads used by each blastn process
 if not os.path.exists(PLANT_BLAST_RESULTS_DIR):
     os.makedirs(PLANT_BLAST_RESULTS_DIR)
 
-# STEP 1: CREATE OR CHECK BLAST DATABASES (SERIAL)
+# STEP 0: CREATE OR CHECK BLAST DATABASES (SERIAL)
 
 plant_files = [
     f for f in os.listdir(PLANT_GENOMES_DIR)
@@ -56,18 +56,29 @@ for plant_file in plant_files:
 
     db_paths.append((plant_path, db_name, db_base))
 
+# STEP 1: GATHER ALL FILTERED (QUERY) FASTA FILES
+selected_files = [
+    f for f in os.listdir(SELECTED_SEQUENCES_FASTA)
+    if f.lower().endswith((".fasta", ".fa", ".fna"))
+]
+
+if not selected_files:
+    print("[ERROR] No suspect (query) FASTA files found in SUSPECT_SEQUENCES_DIR.")
+    exit(1)
+else:
+    print(f"[INFO] Found {len(selected_files)} suspect FASTA files in {SELECTED_SEQUENCES_FASTA}.")
+
+
 # STEP 2: PARALLEL BLAST AGAINST EACH PLANT GENOME
-def run_blast_on_plant(db_info):
-    """
-    Runs blastn of SELECTED_SEQUENCES_FASTA against the given plant DB.
-    Returns the path to the result file.
-    """
+def run_blast(query_path, db_info):
     plant_path, db_name, db_base = db_info
-    result_file = os.path.join(PLANT_BLAST_RESULTS_DIR, f"{db_base}.tsv")
+    query_base = os.path.splitext(os.path.basename(query_path))[0]
+    result_file = os.path.join(PLANT_BLAST_RESULTS_DIR, f"{query_base}_vs_{db_base}.tsv")
+
     if not os.path.exists(result_file):
         blastn_cmd = [
             "blastn",
-            "-query", SELECTED_SEQUENCES_FASTA,
+            "-query", query_path,
             "-db", db_name,
             "-out", result_file,
             "-outfmt", OUTFMT,
@@ -77,20 +88,32 @@ def run_blast_on_plant(db_info):
         ]
         subprocess.run(blastn_cmd, check=True)
     else:
-        print(f"[INFO] BLAST results for {db_base} already exist, skipping.")
+        print(f"[INFO] BLAST results for {query_base} vs {db_base} already exist, skipping.")
 
     return result_file
 
+blast_tasks = []
+for query_file in suspect_files:
+    query_path = os.path.join(SELECTED_SEQUENCES_FASTA, query_file)
+    for db_info in db_paths:
+        blast_tasks.append((query_path, db_info))
+
+results_collected = []
 with ProcessPoolExecutor(max_workers=NUM_PARALLEL_JOBS) as executor:
-    future_to_plant = {executor.submit(run_blast_on_plant, db_info): db_info for db_info in db_paths}
-    for future in as_completed(future_to_plant):
-        db_info = future_to_plant[future]
+    future_to_task = {
+        executor.submit(run_blast, query_path, db_info): (query_path, db_info)
+        for (query_path, db_info) in blast_tasks
+    }
+    for future in as_completed(future_to_task):
+        query_path, db_info = future_to_task[future]
+        query_base = os.path.splitext(os.path.basename(query_path))[0]
         db_base = db_info[2]
         try:
-            result_path = future.result()
-            print(f"[INFO] Completed BLAST for {db_base}; results in {result_path}")
+            result_file = future.result()
+            results_collected.append(result_file)
+            print(f"[INFO] Completed BLAST for {query_base} vs {db_base}; results in {result_file}")
         except Exception as exc:
-            print(f"[ERROR] BLAST failed for {db_base}: {exc}")
+            print(f"[ERROR] BLAST failed for {query_base} vs {db_base}: {exc}")
 
 # STEP 3: COMBINE AND FIND BEST HITS PER QUERY ACROSS ALL PLANT RESULTS
 columns = ["qseqid", "sseqid", "pident", "length", "evalue", "bitscore"]
@@ -106,7 +129,7 @@ for res_file in os.listdir(PLANT_BLAST_RESULTS_DIR):
     if df.empty:
         continue
 
-    df["plant_genome"] = plant_genome_name
+    df["result_file"] = res_file
     all_plant_hits.append(df)
 
 if all_plant_hits:
