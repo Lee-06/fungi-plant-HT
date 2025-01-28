@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Adapted script to process multiple FASTA files instead of a single one.
 @author: Lee Mariault
 """
-
 import os
 import pandas as pd
 from Bio import SeqIO
