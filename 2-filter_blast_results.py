@@ -23,16 +23,9 @@ for filename in os.listdir(blast_dir):
     if filename.endswith(".blast"):
         file_path = os.path.join(blast_dir, filename)
         fungi_genome = filename.replace(".blast", "")
-        
         blast_results = pd.read_csv(file_path, sep="\t", names=columns)
-        
         blast_results["fungi_genome"] = fungi_genome
-        
-        filtered = blast_results[
-            (blast_results["pident"] >= identity_threshold) &
-            (blast_results["length"] >= alignment_length_threshold)
-        ]
-        
+        filtered = blast_results[(blast_results["pident"] >= identity_threshold) & (blast_results["length"] >= alignment_length_threshold)]
         filtered_results = pd.concat([filtered_results, filtered], ignore_index=True)
 
 filtered_results.to_csv(output_file, sep="\t", index=False)
