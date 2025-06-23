@@ -63,7 +63,7 @@ selected_files = [
 ]
 
 if not selected_files:
-    print("[ERROR] No suspect (query) FASTA files found in SUSPECT_SEQUENCES_DIR.")
+    print(f"[ERROR] No suspect (query) FASTA files found in {SELECTED_SEQUENCES_FASTA}.")
     exit(1)
 else:
     print(f"[INFO] Found {len(selected_files)} suspect FASTA files in {SELECTED_SEQUENCES_FASTA}.")
@@ -93,7 +93,7 @@ def run_blast(query_path, db_info):
     return result_file
 
 blast_tasks = []
-for query_file in suspect_files:
+for query_file in selected_files:
     query_path = os.path.join(SELECTED_SEQUENCES_FASTA, query_file)
     for db_info in db_paths:
         blast_tasks.append((query_path, db_info))
