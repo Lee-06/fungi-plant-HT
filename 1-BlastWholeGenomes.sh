@@ -14,19 +14,18 @@ mkdir -p blastresults
 
 for plantgenome in "$PLANT_DIR"/*.fasta; do
     plantfilename=$(basename "$plantgenome")
-	
-    if [ ! -f "${plantgenome}.nsq" ]; then
-        echo "Building DB for $plantfilename..."
-        makeblastdb -in "$plantgenome" -dbtype nucl
+    if [ ! -f "${plantgenome}.sys" ]; then
+        echo "Building hs-blastn index for $plantfilename..."
+        hs-blastn index -i "$plantgenome" -d "$plantgenome"
     fi
-
     for fungigenome in "$FUNGI_DIR"/*.fasta; do
         fungifilename=$(basename "$fungigenome")
-        
         echo "Blasting $plantfilename vs $fungifilename..."
-        # Note: Using hs-blastn here is highly recommended over blastn for speed
-        hs-blastn -db "$plantgenome" -query "$fungigenome" \
-            -num_threads 20 -evalue 1e-20 -outfmt 6 \
-            -out blastresults/${plantfilename}_VS_${fungifilename}.blast
+        hs-blastn align \
+            -d "$plantgenome" \
+            -q "$fungigenome" \
+            -p 20 \
+            -f 6 \
+            -o "blastresults/${plantfilename}_VS_${fungifilename}.blast"
     done
 done
