@@ -4,7 +4,6 @@ import os
 import subprocess
 import sys
 from Bio import SeqIO
-from Bio.Blast.Applications import NcbiblastnCommandline
 
 parser = argparse.ArgumentParser(description="Build Phylogenetic Trees for HGT Validation")
 
@@ -24,6 +23,7 @@ def check_tool(name):
 check_tool("mafft")
 check_tool("iqtree")
 check_tool("blastn")
+check_tool("trimal")
 
 if not os.path.exists(args.outdir):
     os.makedirs(args.outdir)
@@ -57,6 +57,12 @@ def run_mafft(input_fasta, output_aln, threads):
     with open(output_aln, "w") as out_f:
         subprocess.run(cmd, stdout=out_f, stderr=subprocess.DEVNULL)
 
+def run_trimal(input_aln, output_trimmed):
+    """Trims alignment using automated1 heuristic."""
+    # -automated1 is a good general purpose heuristic for trimming
+    cmd = ["trimal", "-in", input_aln, "-out", output_trimmed, "-automated1"]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
 def run_iqtree(input_aln, threads):
     # -bb 1000 = UltraFast Bootstrap
     cmd = ["iqtree", "-s", input_aln, "-bb", "1000", "-nt", str(threads), "-quiet"]
@@ -86,12 +92,19 @@ for record in SeqIO.parse(args.input, "fasta"):
                 f.write(f">{h_id}\n{h_seq}\n")
                 seen.add(h_id)
     
-    # 3. Align
+    # 3. Align (MAFFT)
     aln_path = os.path.join(args.outdir, f"{candidate_id}.aln")
     run_mafft(fasta_path, aln_path, args.threads)
     
-    # 4. Tree
-    run_iqtree(aln_path, args.threads)
-    print(f"    Tree generated: {aln_path}.treefile")
+    # 4. Trim (TrimAl)
+    trimmed_aln_path = os.path.join(args.outdir, f"{candidate_id}.trimmed.aln")
+    run_trimal(aln_path, trimmed_aln_path)
+
+    # 5. Tree (IQ-TREE)
+    if os.path.exists(trimmed_aln_path):
+        run_iqtree(trimmed_aln_path, args.threads)
+        print(f"    Tree generated: {trimmed_aln_path}.treefile")
+    else:
+        print("    [Error] Trimming failed, tree not generated.")
 
 print("Done. Trees are in", args.outdir)
