@@ -3,11 +3,11 @@ import argparse
 import pandas as pd
 import numpy as np
 
-parser = argparse.ArgumentParser(description="Calculate HGT Index by comparing Fungi vs Plant Bitscores.")
+parser = argparse.ArgumentParser(description="Calculate HT Index by comparing Fungi vs Plant Bitscores.")
 parser.add_argument("--fungi_results", required=True, help="Filtered BLAST results against Fungi (from Script 2)")
 parser.add_argument("--plant_results", required=True, help="BLAST results against Plants (from Script 4)")
 parser.add_argument("--output", default="fungi_vs_plant_comparison.tsv", help="Output comparison file")
-parser.add_argument("--candidates_out", default="hgt_candidates.tsv", help="Final HGT candidates file")
+parser.add_argument("--candidates_out", default="ht_candidates.tsv", help="Final HT candidates file")
 
 args = parser.parse_args()
 
