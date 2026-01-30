@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-@author: Lee Mariault
-
-"""
-
-import sys
+import argparse
 import pandas as pd
+import sys
 from Bio import SeqIO
 
-# ── User paths ────────────────────────────────────────────────────────────────
-ANNOTATION_FILE         = "hgt_annotations.emapper.annotations"
-BLAST_FILE              = "hgt_annotations.emapper.seed_orthologs"
-INPUT_FASTA             = "hgt_clusters.fasta"
-OUTPUT_FASTA            = "hgt_filtered.fasta"
+parser = argparse.ArgumentParser(description="Filter out housekeeping genes based on EggNOG annotations.")
+parser.add_argument("--annotations", required=True, help="EggNOG annotation file (.annotations)")
+parser.add_argument("--fasta_in", required=True, help="Clustered FASTA input (ht_clusters.fasta)")
+parser.add_argument("--fasta_out", default="ht_filtered.fasta", help="Final Filtered FASTA output")
 
-# ── Housekeeping keywords ─────────────────────────────────────────────────────
+args = parser.parse_args()
+
+# Keywords to exclude
 HOUSEKEEPING_KEYWORDS = [
     "ribosomal", "18s", "28s", "5s", "rrna", "rdna", "ribonucleoprotein",
     "translation elongation factor", "mitochondrion", "mitochondrial",
@@ -26,70 +22,39 @@ HOUSEKEEPING_KEYWORDS = [
     "primase", "actin", "tubulin", "kinesin", "dynein", "myosin", "chaperone",
     "heat shock protein", "ubiquitin", "kinase", "phosphatase"
 ]
-# lowercase for case-insensitive matching
 keywords_lower = [kw.lower() for kw in HOUSEKEEPING_KEYWORDS]
 
+print("[INFO] Parsing annotations...")
+# EggNOG annotation files often have variable headers. We skip comments ##
 try:
-    blast_df = pd.read_csv(BLAST_FILE, sep="\t", header=None,
-                           comment="#", dtype=str)
-except FileNotFoundError:
-    sys.exit(f"[ERROR] Cannot find seed-orthologs file: {BLAST_FILE!r}")
-print("[INFO] Columns in seed-ortholog file:", blast_df.columns.tolist())
-all_hits = set(blast_df.iloc[:, 0].astype(str))
-
-header_idx = None
-header_line = None
-with open(ANNOTATION_FILE, 'r') as af:
-    for idx, line in enumerate(af):
-        if line.startswith("#query_name"):
-            header_line = line.lstrip("#").strip()
-            header_idx = idx
-            break
-
-if header_idx is None:
-    sys.exit(f"[ERROR] Could not find a line beginning `#query_name` in {ANNOTATION_FILE}")
-
-column_names = header_line.split("\t")
-
-try:
-    eggnog_df = pd.read_csv(
-        ANNOTATION_FILE,
-        sep="\t",
-        skiprows=header_idx + 1,
-        header=None,
-        names=column_names,
-        dtype=str
-    )
+    df = pd.read_csv(args.annotations, sep="\t", comment="#", header=None)
+    # Usually column 0 is Query, column 7 or similar is Description/Free Text.
+    # We'll just concat all text columns to be safe for keywords search
 except Exception as e:
-    sys.exit(f"[ERROR] Failed to parse annotations: {e}")
+    exit(f"[ERROR] Could not read annotations: {e}")
 
-print("[INFO] Columns in annotation file:", eggnog_df.columns.tolist())
+# Identify Housekeeping IDs
+hk_ids = set()
+for index, row in df.iterrows():
+    # Convert entire row to string to search for keywords
+    row_text = " ".join(row.astype(str)).lower()
+    if any(kw in row_text for kw in keywords_lower):
+        # Assuming column 0 is the Query ID (standard for EggNOG)
+        hk_ids.add(str(row[0]))
 
-desc_col = next((c for c in eggnog_df.columns if "free text" in c.lower()), None)
-to_scan = ["Preferred_name"]
-if desc_col:
-    to_scan.append(desc_col)
+print(f"[INFO] Found {len(hk_ids)} sequences matching housekeeping keywords.")
 
-hk_candidates = []
-for _, row in eggnog_df.iterrows():
-    combined = []
-    for col in to_scan:
-        val = row.get(col, "")
-        if pd.notna(val):
-            combined.append(str(val))
-    text = " ".join(combined).lower()
-    if any(kw in text for kw in keywords_lower):
-        hk_candidates.append(str(row["query_name"]))
+# Write Filtered FASTA
+kept_count = 0
+excluded_count = 0
 
-print(f"[INFO] {len(hk_candidates)} queries match housekeeping keywords in name/desc")
+with open(args.fasta_out, "w") as out_handle:
+    for record in SeqIO.parse(args.fasta_in, "fasta"):
+        if record.id not in hk_ids:
+            SeqIO.write(record, out_handle, "fasta")
+            kept_count += 1
+        else:
+            excluded_count += 1
 
-housekeeping_genes = set(hk_candidates).intersection(all_hits)
-print(f"[INFO] Will remove {len(housekeeping_genes)} housekeeping genes total")
-
-kept = []
-for rec in SeqIO.parse(INPUT_FASTA, "fasta"):
-    if rec.id not in housekeeping_genes:
-        kept.append(rec)
-
-SeqIO.write(kept, OUTPUT_FASTA, "fasta")
-print(f"[INFO] Removed {len(housekeeping_genes)} sequences; saved {len(kept)} in {OUTPUT_FASTA}")
+print(f"[SUCCESS] Filtered FASTA saved to {args.fasta_out}")
+print(f"         Kept: {kept_count} | Removed: {excluded_count}")
