@@ -1,84 +1,47 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-@author: Lee Mariault
-"""
+import argparse
 import pandas as pd
 import numpy as np
 
-FUNGI_RESULTS_FILE     = "filtered_blast_results_with_fungi.tsv"  
-PLANT_ALIGNMENT_FILE   = "plant_alignment_results.tsv"            
-FUNGI_VS_PLANT_FILE    = "fungi_vs_plant_comparison.tsv"          
+parser = argparse.ArgumentParser(description="Calculate HGT Index by comparing Fungi vs Plant Bitscores.")
+parser.add_argument("--fungi_results", required=True, help="Filtered BLAST results against Fungi (from Script 2)")
+parser.add_argument("--plant_results", required=True, help="BLAST results against Plants (from Script 4)")
+parser.add_argument("--output", default="fungi_vs_plant_comparison.tsv", help="Output comparison file")
+parser.add_argument("--candidates_out", default="hgt_candidates.tsv", help="Final HGT candidates file")
 
-columns_fungi = [
-    "qseqid", "sseqid", "pident", "length", 
-    "mismatch", "gapopen", "qstart", "qend", 
-    "sstart", "send", "evalue", "bitscore", 
-    "fungi_genome"
-]
+args = parser.parse_args()
 
-fungi_df = pd.read_csv(FUNGI_RESULTS_FILE, sep="\t", names=columns_fungi, header=0, engine="python")
+print("[INFO] Loading Fungi results...")
+fungi_df = pd.read_csv(args.fungi_results, sep="\t")
 
-columns_plant = [
-    "qseqid", "sseqid", "pident", "length", 
-    "evalue", "bitscore", "plant_genome"
-]
-plant_df = pd.read_csv(PLANT_ALIGNMENT_FILE, sep="\t", names=columns_plant, header=0, engine="python")
+print("[INFO] Loading Plant results...")
+plant_df = pd.read_csv(args.plant_results, sep="\t")
 
-fungi_df_sorted = fungi_df.sort_values("bitscore", ascending=False)
-best_fungal_hits = fungi_df_sorted.groupby("qseqid", as_index=False).first()
+fungi_best = fungi_df.sort_values("bitscore", ascending=False).groupby("qseqid", as_index=False).first()
+fungi_best = fungi_best.rename(columns=lambda x: x + "_fungi" if x != "qseqid" else x)
 
-best_fungal_hits = best_fungal_hits.rename(columns={
-    "sseqid":   "sseqid_fungi",
-    "pident":   "pident_fungi",
-    "length":   "length_fungi",
-    "mismatch": "mismatch_fungi",
-    "gapopen":  "gapopen_fungi",
-    "qstart":   "qstart_fungi",
-    "qend":     "qend_fungi",
-    "sstart":   "sstart_fungi",
-    "send":     "send_fungi",
-    "evalue":   "evalue_fungi",
-    "bitscore": "bitscore_fungi",
-    "fungi_genome": "fungi_genome"
-})
+plant_best = plant_df.sort_values("bitscore", ascending=False).groupby("qseqid", as_index=False).first()
+plant_best = plant_best.rename(columns=lambda x: x + "_plant" if x != "qseqid" else x)
 
-plant_df_sorted = plant_df.sort_values("bitscore", ascending=False)
-best_plant_hits = plant_df_sorted.groupby("qseqid", as_index=False).first()
+print("[INFO] Merging and calculating HT Index...")
+comparison = pd.merge(fungi_best, plant_best, on="qseqid", how="outer")
 
-best_plant_hits = best_plant_hits.rename(columns={
-    "sseqid":   "sseqid_plant",
-    "pident":   "pident_plant",
-    "length":   "length_plant",
-    "evalue":   "evalue_plant",
-    "bitscore": "bitscore_plant",
-    "plant_genome": "plant_genome"
-})
+def calculate_metrics(row):
+    bf = row.get("bitscore_fungi", 0)
+    bp = row.get("bitscore_plant", 0)
+    if pd.isna(bf): bf = 0
+    if pd.isna(bp): bp = 0
+    h_index = bf - bp
+    ratio = bf / bp if bp > 0 else bf 
+    return pd.Series([h_index, ratio], index=['h_index', 'score_ratio'])
 
-comparison = pd.merge(
-    best_fungal_hits,
-    best_plant_hits,
-    on="qseqid",
-    how="outer"  
-)
+comparison[["h_index", "score_ratio"]] = comparison.apply(calculate_metrics, axis=1)
+comparison_sorted = comparison.sort_values("h_index", ascending=False)
 
-def kingdom_predominance(row):
-    bf = row.get("bitscore_fungi", np.nan)
-    bp = row.get("bitscore_plant", np.nan)
-    if pd.isna(bf) and pd.isna(bp):
-        return "tie"  
-    elif pd.isna(bf) and not pd.isna(bp):
-        return "plant"  
-    elif pd.isna(bp) and not pd.isna(bf):
-        return "fungi"  
-    else:
-        if bf > bp:
-            return "fungi"
-        elif bp > bf:
-            return "plant"
-        else:
-            return "tie"
+comparison_sorted.to_csv(args.output, sep="\t", index=False)
 
-comparison["predominance"] = comparison.apply(kingdom_predominance, axis=1)
-comparison.to_csv(FUNGI_VS_PLANT_FILE, sep="\t", index=False)
-print(f"[INFO] Final comparison saved to '{FUNGI_VS_PLANT_FILE}'.")
+candidates = comparison_sorted[comparison_sorted["h_index"] > 0]
+candidates.to_csv(args.candidates_out, sep="\t", index=False)
+
+print(f"[SUCCESS] Comparison saved to {args.output}")
+print(f"[INFO] {len(candidates)} potential candidates (h_index > 0) saved to {args.candidates_out}")
