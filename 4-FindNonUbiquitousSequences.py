@@ -5,153 +5,166 @@
 """
 
 import os
+import sys
+import argparse
 import subprocess
 import pandas as pd
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-# Required inputs
-SELECTED_SEQUENCES_FASTA = "[TOREPLACE]"   # Directory with extracted fasta sequences
-PLANT_GENOMES_DIR        = "[TOREPLACE]"    # Directory with plant genome FASTAs
-FUNGI_RESULTS_FILE       = "filtered_blast_results_with_fungi.tsv"
+# ─── ARGUMENT PARSING ───────────────────────────────────────────────────────────
+parser = argparse.ArgumentParser(description="Check distribution of candidates across plant genomes.")
+parser.add_argument("-s", "--selected_fasta", required=True, help="Directory containing extracted FASTA sequences (from Script 3)")
+parser.add_argument("-p", "--plant_genomes", required=True, help="Directory containing all plant genome FASTAs")
+parser.add_argument("-j", "--jobs", type=int, default=4, help="Number of parallel genomes to process at once")
+parser.add_argument("-t", "--threads", type=int, default=8, help="BLAST threads per job")
 
-# Intermediate outputs
-PLANT_BLAST_RESULTS_DIR = "plant_blast_outputs"         # Directory to store each plant BLAST result
-PLANT_COMBINED_RESULTS  = "plant_alignment_results.tsv"  # All plant BLAST results combined
-FUNGI_VS_PLANT_FILE     = "fungi_vs_plant_comparison.tsv" # Final comparison file
+args = parser.parse_args()
 
-# BLAST parameters
-OUTFMT            = "6 qseqid sseqid pident length evalue bitscore"
-EVALUE_THRESHOLD  = 1e-20
-MAX_TARGET_SEQS   = 5
-#Replace the following according to your computer/cluster specifications
-NUM_PARALLEL_JOBS = [TOREPLACE]      # Number of plant genomes to BLAST in parallel
-THREADS_PER_JOB   = [TOREPLACE]      # Threads used by each blastn process 
+SELECTED_SEQUENCES_DIR = args.selected_fasta
+PLANT_GENOMES_DIR = args.plant_genomes
+MAX_PARALLEL_JOBS = args.jobs
+THREADS_PER_JOB = args.threads
 
+# Outputs
+PLANT_BLAST_RESULTS_DIR = "plant_blast_outputs"
+PLANT_COMBINED_RESULTS = "plant_alignment_results.tsv"
+
+# BLAST Parameters
+OUTFMT = "6 qseqid sseqid pident length evalue bitscore"
+EVALUE_THRESHOLD = 1e-20
+
+# ─── SETUP ──────────────────────────────────────────────────────────────────────
 if not os.path.exists(PLANT_BLAST_RESULTS_DIR):
     os.makedirs(PLANT_BLAST_RESULTS_DIR)
 
-# STEP 0: CREATE OR CHECK BLAST DATABASES (SERIAL)
+# ─── FUNCTIONS ──────────────────────────────────────────────────────────────────
+def check_blast_db(fasta_path):
+    """Checks if BLAST DB exists for a fasta, creates it if not."""
+    # Check for .nsq or .nal or .nin
+    if not (os.path.exists(fasta_path + ".nsq") or os.path.exists(fasta_path + ".nin")):
+        # Ensure we don't have a race condition if multiple jobs try to make the same DB
+        # Ideally, DBs are pre-built by Script 1. We assume they exist or try to build.
+        cmd = ["makeblastdb", "-in", fasta_path, "-dbtype", "nucl", "-out", fasta_path]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-plant_files = [
-    f for f in os.listdir(PLANT_GENOMES_DIR)
-    if f.lower().endswith((".fasta", ".fa", ".fna"))
-]
-
-db_paths = []
-for plant_file in plant_files:
-    plant_path = os.path.join(PLANT_GENOMES_DIR, plant_file)
-    db_name = plant_path
-    db_base = os.path.basename(db_name)
-    if not any(os.path.exists(db_name + ext) for ext in [".nsq", ".nin", ".ndb"]):
-        print(f"[INFO] Creating BLAST DB for {db_base}...")
-        makeblastdb_cmd = [
-            "makeblastdb",
-            "-in", plant_path,
-            "-dbtype", "nucl",
-            "-out", db_name
-        ]
-        subprocess.run(makeblastdb_cmd, check=True)
-    else:
-        print(f"[INFO] BLAST DB for {db_base} already exists. Skipping creation.")
-
-    db_paths.append((plant_path, db_name, db_base))
-
-# STEP 1: GATHER ALL FILTERED (QUERY) FASTA FILES
-selected_files = [
-    f for f in os.listdir(SELECTED_SEQUENCES_FASTA)
-    if f.lower().endswith((".fasta", ".fa", ".fna"))
-]
-
-if not selected_files:
-    print(f"[ERROR] No suspect (query) FASTA files found in {SELECTED_SEQUENCES_FASTA}.")
-    exit(1)
-else:
-    print(f"[INFO] Found {len(selected_files)} suspect FASTA files in {SELECTED_SEQUENCES_FASTA}.")
-
-
-# STEP 2: PARALLEL BLAST AGAINST EACH PLANT GENOME
-def run_blast(query_path, db_info):
-    plant_path, db_name, db_base = db_info
-    query_base = os.path.splitext(os.path.basename(query_path))[0]
-    result_file = os.path.join(PLANT_BLAST_RESULTS_DIR, f"{query_base}_vs_{db_base}.tsv")
-
-    if not os.path.exists(result_file):
-        blastn_cmd = [
+def run_blast_job(plant_fasta_path, query_fasta_path, output_path):
+    """Runs blastn for a specific plant genome against the query sequences."""
+    try:
+        # ensure db exists
+        check_blast_db(plant_fasta_path)
+        
+        cmd = [
             "blastn",
-            "-query", query_path,
-            "-db", db_name,
-            "-out", result_file,
+            "-db", plant_fasta_path,
+            "-query", query_fasta_path,
             "-outfmt", OUTFMT,
             "-evalue", str(EVALUE_THRESHOLD),
-            "-max_target_seqs", str(MAX_TARGET_SEQS),
-            "-num_threads", str(THREADS_PER_JOB)
+            "-num_threads", str(THREADS_PER_JOB),
+            "-out", output_path
         ]
-        subprocess.run(blastn_cmd, check=True)
-    else:
-        print(f"[INFO] BLAST results for {query_base} vs {db_base} already exist, skipping.")
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            return f"Error blasting {plant_fasta_path}: {result.stderr}"
+        return None  # Success
+    except Exception as e:
+        return str(e)
 
-    return result_file
+# ─── MAIN EXECUTION ─────────────────────────────────────────────────────────────
+def main():
+    # 1. Consolidate all 'selected' sequences into one master query file
+    # This is much more efficient than blasting many small fasta files individually.
+    master_query_file = "all_candidates_query.fasta"
+    print("[INFO] Consolidating candidate sequences into master query...")
+    
+    with open(master_query_file, 'w') as outfile:
+        found_any = False
+        for filename in os.listdir(SELECTED_SEQUENCES_DIR):
+            if filename.endswith(".fasta") or filename.endswith(".fa"):
+                path = os.path.join(SELECTED_SEQUENCES_DIR, filename)
+                with open(path, 'r') as infile:
+                    outfile.write(infile.read())
+                    found_any = True
+    
+    if not found_any:
+        sys.exit(f"[ERROR] No fasta files found in {SELECTED_SEQUENCES_DIR}")
 
-blast_tasks = []
-for query_file in selected_files:
-    query_path = os.path.join(SELECTED_SEQUENCES_FASTA, query_file)
-    for db_info in db_paths:
-        blast_tasks.append((query_path, db_info))
+    # 2. Prepare Jobs
+    plant_files = [
+        os.path.join(PLANT_GENOMES_DIR, f) 
+        for f in os.listdir(PLANT_GENOMES_DIR) 
+        if f.endswith(('.fasta', '.fa', '.fna'))
+    ]
+    
+    print(f"[INFO] Found {len(plant_files)} plant genomes to check against.")
+    
+    # 3. Run BLAST in Parallel
+    print(f"[INFO] Running BLAST with {MAX_PARALLEL_JOBS} parallel jobs...")
+    
+    with ProcessPoolExecutor(max_workers=MAX_PARALLEL_JOBS) as executor:
+        futures = {}
+        for plant_path in plant_files:
+            plant_name = os.path.basename(plant_path)
+            out_file = os.path.join(PLANT_BLAST_RESULTS_DIR, f"{plant_name}.tsv")
+            
+            # Skip if already done (resume capability)
+            if os.path.exists(out_file) and os.path.getsize(out_file) > 0:
+                continue
+                
+            future = executor.submit(run_blast_job, plant_path, master_query_file, out_file)
+            futures[future] = plant_name
 
-results_collected = []
-with ProcessPoolExecutor(max_workers=NUM_PARALLEL_JOBS) as executor:
-    future_to_task = {
-        executor.submit(run_blast, query_path, db_info): (query_path, db_info)
-        for (query_path, db_info) in blast_tasks
-    }
-    for future in as_completed(future_to_task):
-        query_path, db_info = future_to_task[future]
-        query_base = os.path.splitext(os.path.basename(query_path))[0]
-        db_base = db_info[2]
+        for future in as_completed(futures):
+            plant_name = futures[future]
+            error = future.result()
+            if error:
+                print(f"[ERROR] {plant_name}: {error}", file=sys.stderr)
+            else:
+                # Optional: Print progress dots
+                print(".", end="", flush=True)
+
+    print("\n[INFO] BLAST processing complete.")
+
+    # 4. Combine Results
+    print("[INFO] Combining results...")
+    all_plant_hits = []
+    columns_list = ["qseqid", "sseqid", "pident", "length", "evalue", "bitscore"]
+
+    for filename in os.listdir(PLANT_BLAST_RESULTS_DIR):
+        if not filename.endswith(".tsv"):
+            continue
+            
+        file_path = os.path.join(PLANT_BLAST_RESULTS_DIR, filename)
+        
+        # Determine plant name from filename
+        plant_genome_name = filename.replace(".tsv", "") # Simplification
+        
         try:
-            result_file = future.result()
-            results_collected.append(result_file)
-            print(f"[INFO] Completed BLAST for {query_base} vs {db_base}; results in {result_file}")
-        except Exception as exc:
-            print(f"[ERROR] BLAST failed for {query_base} vs {db_base}: {exc}")
+            # Check for empty files
+            if os.path.getsize(file_path) == 0:
+                continue
 
-# STEP 3: COMBINE AND FIND BEST HITS PER QUERY ACROSS ALL PLANT RESULTS
-columns = ["qseqid", "sseqid", "pident", "length", "evalue", "bitscore"]
-all_plant_hits = []
+            df = pd.read_csv(file_path, sep="\t", names=columns_list)
+            df["plant_genome"] = plant_genome_name
+            all_plant_hits.append(df)
+        except Exception as e:
+            print(f"[WARNING] Could not read {filename}: {e}")
 
-for res_file in os.listdir(PLANT_BLAST_RESULTS_DIR):
-    if not res_file.endswith(".tsv"):
-        continue
-    file_path = os.path.join(PLANT_BLAST_RESULTS_DIR, res_file)
-    plant_genome_name = os.path.splitext(res_file)[0]
+    if all_plant_hits:
+        plant_results_df = pd.concat(all_plant_hits, ignore_index=True)
+        
+        # Save raw combined results
+        plant_results_df.to_csv(PLANT_COMBINED_RESULTS, sep="\t", index=False)
+        print(f"[SUCCESS] Combined plant hits saved to {PLANT_COMBINED_RESULTS}")
+        print(f"[INFO] Total hits found: {len(plant_results_df)}")
+        
+        # (The comparison logic happens in Script 5, so we stop here)
+    else:
+        print("[WARNING] No hits found in any plant genome.")
 
-    df = pd.read_csv(file_path, sep="\t", names=columns)
-    if df.empty:
-        continue
+    # Clean up temp file
+    if os.path.exists(master_query_file):
+        os.remove(master_query_file)
 
-    df["result_file"] = res_file
-    all_plant_hits.append(df)
-
-if all_plant_hits:
-    plant_results_df = pd.concat(all_plant_hits, ignore_index=True)
-    best_plant_hits = (
-        plant_results_df
-        .sort_values("bitscore", ascending=False)
-        .groupby("qseqid", as_index=False)
-        .first()
-    )
-    # Save all combined hits to a TSV
-    plant_results_df.to_csv(PLANT_COMBINED_RESULTS, sep="\t", index=False)
-    print(f"[INFO] Combined plant hits: {plant_results_df.shape[0]} total rows.")
-else:
-    best_plant_hits = pd.DataFrame(columns=columns + ["plant_genome"])
-    print("[WARNING] No hits found in any plant BLAST results.")
-
-best_plant_hits = best_plant_hits.rename(columns={
-    "sseqid": "sseqid_plant",
-    "pident": "pident_plant",
-    "length": "length_plant",
-    "evalue": "evalue_plant",
-    "bitscore": "bitscore_plant",
-    "plant_genome": "best_plant_genome"
-})
+if __name__ == "__main__":
+    main()
