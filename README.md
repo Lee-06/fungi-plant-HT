@@ -1,6 +1,6 @@
 __**Overview**__
 
-This repository contains the bioinformatics pipeline used to identify, filter, and validate Horizontal Transfer (HT) candidates between fungi and plants. The pipeline performs a massive all-vs-all genomic comparison, filters for high-confidence transfer events, removes contaminants/housekeeping genes, and validates candidates using phylogenetic reconstruction.
+The pipeline performs a massive all-vs-all genomic comparison, filters for high-confidence transfer events, removes contaminants/housekeeping genes, and validates candidates using phylogenetic reconstruction.
 
 In order for the pipeline to function correctly, it is highly recommended to have a dataset containing genomes from a wide taxonomical range (at least 1 species per family, dozens of families represented per orders).
 
