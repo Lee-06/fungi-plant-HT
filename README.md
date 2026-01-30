@@ -2,7 +2,13 @@ __**Overview**__
 
 The pipeline performs a massive all-vs-all genomic comparison, filters for high-confidence transfer events, removes contaminants/housekeeping genes, and validates candidates using phylogenetic reconstruction.
 
-In order for the pipeline to function correctly, it is highly recommended to have a dataset containing genomes from a wide taxonomical range (at least 1 species per family, dozens of families represented per orders).
+__**Critical Data Requirements**__
+
+This pipeline is designed for large-scale comparative genomics. To obtain meaningful results and successfully distinguish Horizontal Gene Transfers (HGT) from vertical inheritance or contamination, your input dataset must meet specific criteria:
+- Taxonomic Breadth: You must include a diverse representation of genomes from both kingdoms.
+- Fungi: A wide range of phyla (e.g., Ascomycota, Basidiomycota, basal lineages) is required to accurately identify the fungal origin of candidate sequences.
+- Plants: A broad sampling of plant families (Angiosperms, Gymnosperms, Bryophytes, etc.) is essential. The "patchy distribution" filter (Script 4) relies on having enough distant plant genomes to prove that a candidate gene is absent in closely related species, effectively ruling out vertical inheritance.
+- Volume: This workflow was validated on a dataset of ~1,080 fungal genomes and ~400 plant genomes. Running this pipeline on a small dataset (e.g., <50 genomes) will likely yield a high rate of false positives (conserved genes that appear "unique" simply due to the small sample size).
 
 __**System Requirements**__
 
