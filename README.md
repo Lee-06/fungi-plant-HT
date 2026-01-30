@@ -7,6 +7,7 @@ In order for the pipeline to function correctly, it is highly recommended to hav
 __**System Requirements**__
 
 *Dependencies*
+
 The pipeline requires the following tools to be installed and in your system $PATH:
 BLAST+ (specifically blastn, makeblastdb)
 hs-blastn (Highly recommended for the initial genome-wide search)
@@ -17,6 +18,7 @@ IQ-TREE (for phylogenetic tree inference)
 Diamond (used by EggNOG-mapper)
 
 *Python Libraries*
+
 pandas
 biopython
 numpy
